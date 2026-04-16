@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>الدومينو الفارسي - فارس</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        /* نسق عام */
+        body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: #f1f5f9; margin: 0; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        
+        /* شاشة الدخول */
+        #lobby { background: #1e293b; max-width: 400px; margin: 100px auto; padding: 30px; border-radius: 20px; text-align: center; }
+        #lobby input { width: 90%; padding: 12px; margin: 10px 0; background: #0f172a; border: 1px solid #334155; color: white; border-radius: 8px; }
+        #lobby button { width: 95%; padding: 12px; background: #eab308; color: black; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; margin-top: 10px; }
+        
+        /* شاشة اللعبة */
+        #gameArea { display: none; }
+        .header { display: flex; justify-content: space-between; background: #1e293b; padding: 15px; border-radius: 10px; margin-bottom: 20px; }
+        
+        /* الطاولة */
+        .board { background: #065f46; padding: 30px; border-radius: 20px; border: 5px solid #854d0e; min-height: 100px; margin: 20px 0; display: flex; flex-wrap: wrap; gap: 10px; }
+        .board-piece { background: #fef3c7; color: black; padding: 15px 20px; border-radius: 10px; font-weight: bold; font-size: 20px; }
+        
+        /* يد اللاعب */
+        .hand { display: flex; flex-wrap: wrap; gap: 15px; margin-top: 30px; justify-content: center; }
+        .piece-card { background: #f8fafc; color: #0f172a; padding: 15px; border-radius: 15px; cursor: pointer; border: 3px solid #eab308; text-align: center; min-width: 90px; }
+        .piece-card:hover { transform: translateY(-5px); box-shadow: 0 10px 20px rgba(234, 179, 8, 0.3); }
+        .piece-name { font-size: 14px; color: #475569; margin-top: 5px; }
+        
+        /* أزرار التحكم */
+        .actions { display: flex; gap: 15px; justify-content: center; margin: 20px 0; }
+        .btn { padding: 12px 25px; border-radius: 30px; font-weight: bold; border: none; cursor: pointer; }
+        .btn-primary { background: #eab308; color: black; }
+        .btn-secondary { background: #475569; color: white; }
+        
+        /* جداول الأرقام */
+        .tables { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 40px; background: #1e293b; padding: 20px; border-radius: 20px; }
+        .table-box { max-height: 300px; overflow-y: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #334155; color: #eab308; padding: 8px; }
+        td { padding: 5px; border-bottom: 1px solid #334155; text-align: center; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <!-- شاشة تسجيل الدخول -->
+    <div id="lobby">
+        <h1>🀄 الدومينو الفارسي</h1>
+        <p style="color: #94a3b8;">قطع 0-0 إلى 9-9</p>
+        <input type="text" id="playerName" placeholder="اسمك" value="فارس">
+        <button onclick="createRoom()">🎮 إنشاء غرفة</button>
+        <p style="margin: 15px 0; color: #64748b;">--- أو ---</p>
+        <input type="text" id="roomId" placeholder="رمز الغرفة">
+        <button onclick="joinRoom()">🚪 دخول</button>
+    </div>
+
+    <!-- شاشة اللعب -->
+    <div id="gameArea">
+        <div class="header">
+            <span>🏷️ الغرفة: <strong id="roomDisplay"></strong></span>
+            <span id="turnDisplay">في الانتظار...</span>
+            <button class="btn btn-secondary" onclick="copyLink()">📋 نسخ الرابط</button>
+        </div>
+
+        <div id="playersList" style="display: flex; gap: 20px; justify-content: center;"></div>
+
+        <div class="board" id="boardPieces">الطاولة فارغة</div>
+
+        <div style="text-align: center;">
+            <button class="btn btn-secondary" onclick="drawPiece()" id="drawBtn">🎲 سحب من البنك (<span id="boneyardCount">0</span>)</button>
+        </div>
+
+        <div id="myHand" class="hand"></div>
+
+        <div class="actions">
+            <button class="btn btn-primary" id="startBtn" onclick="startGame()">▶️ بدء اللعبة</button>
+            <button class="btn btn-secondary" onclick="passTurn()">⏭️ تمرير</button>
+        </div>
+
+        <!-- جداول النظام الفارسي -->
+        <div class="tables">
+            <div class="table-box">
+                <h3>🔵 أحادي (فردي)</h3>
+                <table id="uniTable"><tr><th>رقم</th><th>فارسي</th></tr></table>
+            </div>
+            <div class="table-box">
+                <h3>🟢 زوجي (Bi-Code)</h3>
+                <table id="biTable"><tr><th>رقم</th><th>فارسي</th></tr></table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // متغيرات عامة
+    const socket = io();
+    let room = null, playerName = '';
+    let gameState = {};
+
+    // جداول الأرقام الفارسية (نفس قاموس البايثون)
+    const FARSI = {0:"صِفر",1:"يَك",2:"دو",3:"سِه",4:"جَهَار",5:"بَنْج",6:"شِيش",7:"هَفْت",8:"هَشْت",9:"نُه",10:"دَه",11:"يازْدَه",12:"دَوازْدَه",13:"سيزْدَه",14:"جَهَارْدَه",15:"پانزْدَه",16:"شانزْدَه",17:"هَفْدَه",18:"هَشْدَه",19:"نوزْدَه",20:"بيست",30:"سي",40:"جِهِل",50:"پَنْجاه",60:"شَصْت",70:"هَفْتاد",80:"هَشْتاد",90:"نَوَد",100:"صَد"};
+
+    // تعبئة الجداول عند التحميل
+    function fillTables() {
+        let uni = '', bi = '';
+        for(let i=0; i<=64; i++) {
+            let name = FARSI[i] || i;
+            if(i%2===0) bi += `<tr><td>${i}</td><td>${name}</td></tr>`;
+            else uni += `<tr><td>${i}</td><td>${name}</td></tr>`;
+        }
+        document.querySelector('#uniTable').innerHTML += uni;
+        document.querySelector('#biTable').innerHTML += bi;
+    }
+    fillTables();
+
+    // دوال الاتصال
+    function createRoom() {
+        playerName = document.getElementById('playerName').value;
+        fetch('/create', {method:'POST'}).then(r=>r.json()).then(d=>{
+            room = d.room;
+            joinSocket();
+        });
+    }
+
+    function joinRoom() {
+        playerName = document.getElementById('playerName').value;
+        room = document.getElementById('roomId').value;
+        joinSocket();
+    }
+
+    function joinSocket() {
+        socket.emit('join', {room, name:playerName});
+        document.getElementById('lobby').style.display = 'none';
+        document.getElementById('gameArea').style.display = 'block';
+        document.getElementById('roomDisplay').innerText = room;
+    }
+
+    function copyLink() {
+        navigator.clipboard.writeText(room);
+        alert('تم نسخ رمز الغرفة: ' + room);
+    }
+
+    function startGame() {
+        socket.emit('start', {room});
+    }
+
+    function drawPiece() {
+        socket.emit('draw', {room, player:playerName});
+    }
+
+    function passTurn() {
+        socket.emit('pass', {room, player:playerName});
+    }
+
+    function playPiece(piece) {
+        socket.emit('play', {room, player:playerName, piece});
+    }
+
+    // استقبال التحديثات
+    socket.on('joined', (data) => {
+        let str = data.players.map(p => `<span style="background:#334155; padding:10px; border-radius:20px;">${p}</span>`).join('');
+        document.getElementById('playersList').innerHTML = str;
+    });
+
+    socket.on('state', (state) => {
+        gameState = state;
+        document.getElementById('turnDisplay').innerText = state.current ? `دور: ${state.current}` : 'انتهت الجولة';
+        document.getElementById('boneyardCount').innerText = state.boneyard;
+        
+        // تحديث الطاولة
+        let boardHtml = state.board.map(p => `<div class="board-piece">${p}</div>`).join('');
+        document.getElementById('boardPieces').innerHTML = boardHtml || 'الطاولة فارغة';
+        
+        // تحديث يد اللاعب
+        let myHand = state.detailed[playerName] || [];
+        let handHtml = myHand.map(p => 
+            `<div class="piece-card" onclick="playPiece('${p.str}')">
+                ${p.str}<br><span class="piece-name">${p.name}</span><br>
+                <span style="background:#eab308; color:black; padding:2px 8px; border-radius:20px;">${p.val}</span>
+            </div>`
+        ).join('');
+        document.getElementById('myHand').innerHTML = handHtml;
+        
+        // تفعيل/تعطيل الأزرار
+        let isMyTurn = (state.current === playerName);
+        document.getElementById('drawBtn').style.opacity = isMyTurn ? '1' : '0.5';
+    });
+
+    socket.on('round_end', (data) => {
+        alert(`🏆 فاز ${data.winner || 'لا أحد (انسداد)'} بالجولة!\nالنقاط: ${JSON.stringify(data.scores)}`);
+    });
+
+    socket.on('drawn', (data) => {
+        if(data.player === playerName) alert(`🎲 سحبت: ${data.name}`);
+    });
+</script>
+</body>
+</html>
